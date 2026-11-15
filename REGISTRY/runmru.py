@@ -1,122 +1,96 @@
-"""Manage the Run dialog history (RunMRU) with winreg - Windows only.
+"""Registry assignment, task 4: the Run window history (RunMRU).
 
-Only touches the current user's RunMRU key, and only its history records:
-single lowercase-letter REG_SZ values (a-z) plus the MRUList string.
-Any other value in the key is left alone. Try it on a virtual machine first
-and export the key before changing it:
-  reg export "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU" backup.reg
+1. Print all the history   (OpenKey, QueryInfoKey, EnumValue)
+2. Delete a value from the history
+3. Plant (add) a value in the history
 
-Usage:
-  python runmru.py list
-  python runmru.py delete <letter>      e.g. delete b
-  python runmru.py add <command>        e.g. add calc
+Windows only. Run on a virtual machine.
 """
-import re
-import sys
 import winreg
 
 KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
-SUFFIX = "\\1"  # records are stored as command + backslash + 1
-LETTER = re.compile(r"^[a-z]$")
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 
-def open_key(access):
-    return winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY_PATH, 0, access)
+def read_values(key):
+    """Return {name: value} for every value under the key."""
+    values = {}
+    num_values = winreg.QueryInfoKey(key)[1]
+    for i in range(num_values):
+        name, value, _ = winreg.EnumValue(key, i)
+        values[name] = value
+    return values
 
 
-def read_all():
-    """Return (entries, order, order_ok).
-
-    entries: {letter: text} for valid history records only.
-    order:   MRUList letters that point to a valid record, without repeats.
-    order_ok: False if MRUList is missing, not a string, or had bad letters.
-    """
-    entries, raw_order = {}, None
-    with open_key(winreg.KEY_READ) as key:
-        _, count, _ = winreg.QueryInfoKey(key)
-        for i in range(count):
-            name, value, kind = winreg.EnumValue(key, i)
-            if name == "MRUList":
-                if kind == winreg.REG_SZ and isinstance(value, str):
-                    raw_order = value
-            elif LETTER.match(name) and kind == winreg.REG_SZ and isinstance(value, str):
-                entries[name] = value
-    order = []
-    for ch in raw_order or "":
-        if ch in entries and ch not in order:
-            order.append(ch)
-    order_ok = raw_order is not None and "".join(order) == raw_order
-    return entries, "".join(order), order_ok
+def print_history():
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY_PATH) as key:
+        for name, value in read_values(key).items():
+            print(f"{name} = {value}")
 
 
-def strip_suffix(text):
-    return text[:-len(SUFFIX)] if text.endswith(SUFFIX) else text
-
-
-def full_order(entries, order):
-    """MRUList order first, then any remaining records alphabetically."""
-    rest = sorted(c for c in entries if c not in order)
-    return order + "".join(rest)
-
-
-def show():
-    entries, order, order_ok = read_all()
-    if not entries:
-        print("(history is empty)")
+def delete_value(name):
+    if len(name) != 1 or name not in LETTERS:
+        print("Enter a single lowercase letter (a-z). MRUList cannot be deleted.")
         return
-    for pos, letter in enumerate(full_order(entries, order), 1):
-        print(f"{pos}. [{letter}] {strip_suffix(entries[letter])}")
-    if not order_ok:
-        print("Note: MRUList is missing or inconsistent, so the order above may not match Windows.")
+    access = winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY_PATH, 0, access) as key:
+        values = read_values(key)          # read everything first
+        if name not in values:
+            print(f"No value named '{name}'.")
+            return
+        if "MRUList" not in values:
+            print("MRUList is missing, nothing was changed.")
+            return
+        new_order = values["MRUList"].replace(name, "")
+        winreg.DeleteValue(key, name)
+        winreg.SetValueEx(key, "MRUList", 0, winreg.REG_SZ, new_order)
+    print(f"Deleted '{name}'.")
 
 
-def write_order(key, order):
-    winreg.SetValueEx(key, "MRUList", 0, winreg.REG_SZ, order)
+def add_value(command):
+    if not command:
+        print("Empty command.")
+        return
+    access = winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY_PATH, 0, access) as key:
+        values = read_values(key)          # read everything first
+        if "MRUList" not in values:
+            print("MRUList is missing, nothing was changed.")
+            return
+        order = values["MRUList"]
+        # a free letter is not in the real value names and not in MRUList
+        free = [c for c in LETTERS if c not in values and c not in order]
+        if not free:
+            print("The history is full.")
+            return
+        name = free[0]
+        # Run history values end with \1
+        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, command + "\\1")
+        # the newest entry goes first in the order string
+        winreg.SetValueEx(key, "MRUList", 0, winreg.REG_SZ, name + order)
+    print(f"Added '{command}' as '{name}'.")
 
 
-def delete(letter):
-    if not LETTER.match(letter):
-        sys.exit("Entry name must be a single lowercase letter a-z.")
-    entries, order, _ = read_all()
-    if letter not in entries:
-        sys.exit(f"No history entry named '{letter}'.")
-    new_order = full_order(entries, order).replace(letter, "")
-    with open_key(winreg.KEY_SET_VALUE) as key:
-        winreg.DeleteValue(key, letter)
-        write_order(key, new_order)
-    print(f"Deleted entry '{letter}'.")
-
-
-def add(command):
-    if not command.strip() or any(ord(c) < 32 for c in command):
-        sys.exit("Command must be non-empty text without control characters.")
-    entries, order, _ = read_all()
-    free = [c for c in "abcdefghijklmnopqrstuvwxyz" if c not in entries]
-    if not free:
-        sys.exit("History is full (26 entries). Delete one first.")
-    letter = free[0]
-    new_order = letter + full_order(entries, order)
-    with open_key(winreg.KEY_SET_VALUE) as key:
-        winreg.SetValueEx(key, letter, 0, winreg.REG_SZ, command + SUFFIX)
-        write_order(key, new_order)
-    print(f"Added '{command}' as entry '{letter}'.")
-
-
-def main(args):
-    try:
-        if args[:1] == ["list"] and len(args) == 1:
-            show()
-        elif len(args) == 2 and args[0] == "delete":
-            delete(args[1])
-        elif len(args) >= 2 and args[0] == "add":
-            add(" ".join(args[1:]))
-        else:
-            print(__doc__)
-    except FileNotFoundError:
-        sys.exit("RunMRU key not found. Open the Run window (Win+R) and run something first.")
-    except PermissionError:
-        sys.exit("No permission to change the RunMRU key.")
+def main():
+    while True:
+        print("\n1. Print history\n2. Delete a value\n3. Add a value\n0. Exit")
+        choice = input("Choose: ").strip()
+        try:
+            if choice == "1":
+                print_history()
+            elif choice == "2":
+                delete_value(input("Value name to delete (for example a): ").strip())
+            elif choice == "3":
+                add_value(input("Command to add (for example calc): ").strip())
+            elif choice == "0":
+                break
+        except FileNotFoundError:
+            print("The RunMRU key does not exist. Run something from Win+R first.")
+        except PermissionError:
+            print("No permission to access the key.")
+        except OSError as e:
+            print(f"Registry error: {e}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()
