@@ -1,15 +1,20 @@
 # REGISTRY
 
-Windows Registry assignment (12th grade cyber).
+Task 4 of the Registry assignment: the Run window history.
 
-`runmru.py` manages the Run dialog history (`HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`) using Python's `winreg`.
+The history is stored in `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`.
+`runmru.py` uses Python's `winreg` module (`OpenKey`, `QueryInfoKey`, `EnumValue`) to:
 
-```
-python runmru.py list
-python runmru.py delete <letter>
-python runmru.py add <command>
-```
+1. print all the history values,
+2. delete a value from the history,
+3. add (plant) a value in the history.
 
-- Windows only. It reads and changes only the history records of the current user's RunMRU key (single-letter string values `a`-`z` and `MRUList`). Other values are left alone.
-- Back up the key first (`reg export`, command is in the script's header) and try it on a virtual machine.
-- Testing: `test_mock.py` runs the logic against a fake in-memory `winreg` (add, delete, invalid names, non-string values, missing or malformed `MRUList`, full history, missing key). It has not been run against a real Windows registry.
+## Run
+
+Windows only. The assignment recommends doing registry experiments on a virtual machine.
+
+1. Open the Run window (Win+R) and run a few commands, for example `notepad` and `winword`.
+2. Run `python runmru.py`.
+3. Choose 1 to print the history, 2 to delete a value by its name (`a`, `b`, ...), or 3 to add a command.
+
+The program has not been run on a real Windows machine yet.
